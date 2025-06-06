@@ -1,18 +1,17 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
-from . import models
-from .database import engine
+from app.core.config import settings
+from app.logging_config import setup_logging
+from app.api import resume_router, jobs_router
 
-# Create database tables
-models.Base.metadata.create_all(bind=engine)
+logger = setup_logging()
 
-app = FastAPI(title="Job Search API")
+app = FastAPI(title=settings.PROJECT_NAME)
 
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],  # Frontend URL
+    allow_origins=settings.CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -22,8 +21,8 @@ app.add_middleware(
 #app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # Import and include routes
-from .routes import app as routes_app
-app.include_router(routes_app)
+app.include_router(resume_router)
+app.include_router(jobs_router)
 
 if __name__ == "__main__":
     import uvicorn

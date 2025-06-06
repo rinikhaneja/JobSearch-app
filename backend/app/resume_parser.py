@@ -6,53 +6,64 @@ import spacy
 import magic
 from datetime import datetime
 import re
+import logging
+from dateutil import parser as date_parser
 
 # Load spaCy model
 nlp = spacy.load("en_core_web_sm")
 
+logger = logging.getLogger('custom_logger')
+
 class ResumeParser:
+    """
+    Parses resume files (PDF, DOCX) to extract structured information such as name, contact info, skills, experience, education, and accolades.
+    Usage: Instantiate and call parse_resume(file_path) to get extracted data as a dictionary.
+    """
     def __init__(self):
+        logger.info('ResumeParser instantiated')
         self.nlp = spacy.load("en_core_web_sm")
+        logger.debug('spaCy model loaded')
         
     def extract_text_from_file(self, file_path: str) -> str:
-        """Extract text from different file formats."""
+        logger.info(f'extract_text_from_file called with file_path: {file_path}')
         mime = magic.Magic(mime=True)
         file_type = mime.from_file(file_path)
-        
+        logger.debug(f'Detected file type: {file_type}')
         if file_type == "application/pdf":
             text = self._extract_from_pdf(file_path)
         elif file_type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
             text = self._extract_from_docx(file_path)
         else:
+            logger.error(f'Unsupported file type: {file_type}')
             raise ValueError(f"Unsupported file type: {file_type}")
-        
-        print(f"DEBUG: Extracted text from file:\n{text[:500]}...")  # Print first 500 chars
+        logger.debug(f'Extracted text (first 500 chars): {text[:500]}')
         return text
 
     def _extract_from_pdf(self, file_path: str) -> str:
-        """Extract text from PDF file."""
+        logger.info(f'_extract_from_pdf called with file_path: {file_path}')
         with open(file_path, 'rb') as file:
             pdf = PdfReader(file)
             text = ""
             for page in pdf.pages:
-                text += page.extract_text()
+                page_text = page.extract_text()
+                logger.debug(f'Extracted page text (first 200 chars): {page_text[:200] if page_text else "None"}')
+                text += page_text
         return text
 
     def _extract_from_docx(self, file_path: str) -> str:
-        """Extract text from DOCX file."""
+        logger.info(f'_extract_from_docx called with file_path: {file_path}')
         doc = docx.Document(file_path)
         text = ""
         for paragraph in doc.paragraphs:
+            logger.debug(f'Extracted paragraph: {paragraph.text[:200]}')
             text += paragraph.text + "\n"
         return text
 
     def parse_resume(self, file_path: str) -> Dict:
-        """Parse resume text and extract structured information."""
-        # First extract text from the file
+        logger.info(f'parse_resume called with file_path: {file_path}')
         text = self.extract_text_from_file(file_path)
         doc = self.nlp(text)
-        
-        # Initialize result dictionary
+        logger.debug('spaCy doc created')
         result = {
             "name": self._extract_name(doc),
             "phone_number": self._extract_phone(text),
@@ -64,7 +75,7 @@ class ResumeParser:
             "education": self._extract_education(doc),
             "accolades": self._extract_accolades(doc)
         }
-        
+        logger.info(f'Parsed resume result: {result}')
         return result
 
     def _extract_name(self, doc) -> Optional[str]:
@@ -96,31 +107,29 @@ class ResumeParser:
     def _extract_email(self, text: str) -> Optional[str]:
         """Extract email address using regex and additional heuristics."""
         print(f"DEBUG: Attempting to extract email from text:\n{text[:500]}...")  # Print first 500 chars
-        
-        # First try to find email with potential spaces
-        email_with_spaces = re.search(r'email\s*:?\s*([\w\.-]+)\s*@\s*([\w\.-]+(?:\s*\.\s*[\w\.-]+)*)', text, re.IGNORECASE)
+
+        # Try to find email with potential spaces anywhere in the address
+        email_with_spaces = re.search(
+            r'([A-Za-z0-9._%+-]+)\s*@\s*([A-Za-z0-9.\s-]+)', text
+        )
         if email_with_spaces:
-            # Remove all spaces from the email parts
             username = email_with_spaces.group(1).replace(" ", "")
             domain = email_with_spaces.group(2).replace(" ", "")
             email = f"{username}@{domain}"
             print(f"DEBUG: Found email with spaces: {email}")
             return email
-        
-        # Standard email pattern
-        email_pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
-        
-        # First try exact email pattern
-        match = re.search(email_pattern, text)
+
+        # Standard email pattern (remove spaces from the text first)
+        text_no_spaces = text.replace(" ", "")
+        email_pattern = r'[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}'
+        match = re.search(email_pattern, text_no_spaces)
         if match:
             print(f"DEBUG: Found email using standard pattern: {match.group(0)}")
             return match.group(0)
-        
-        # If not found, try to find email in common formats
-        # Look for patterns like "Email: john@example.com" or "E-mail: john@example.com"
+
+        # Try keyword-based patterns (as in your code)
         email_keywords = ["email", "e-mail", "mail", "contact"]
         for keyword in email_keywords:
-            # Look for the keyword followed by various separators
             patterns = [
                 f"{keyword}[:\\s]+([A-Za-z0-9._%+-]+)\\s*@\\s*([A-Za-z0-9.-]+(?:\\s*\\.\\s*[A-Za-z0-9.-]+)*)",
                 f"{keyword}[\\s]*[=]+[\\s]*([A-Za-z0-9._%+-]+)\\s*@\\s*([A-Za-z0-9.-]+(?:\\s*\\.\\s*[A-Za-z0-9.-]+)*)",
@@ -129,23 +138,24 @@ class ResumeParser:
             for pattern in patterns:
                 match = re.search(pattern, text, re.IGNORECASE)
                 if match:
-                    # Remove all spaces from the email parts
                     username = match.group(1).replace(" ", "")
                     domain = match.group(2).replace(" ", "")
                     email = f"{username}@{domain}"
                     print(f"DEBUG: Found email using pattern '{pattern}': {email}")
                     return email
-        
+
         # Try to find email in contact information section
-        contact_section = re.search(r'(?:contact|contact information|contact details)[^@]*?([A-Za-z0-9._%+-]+)\s*@\s*([A-Za-z0-9.-]+(?:\s*\.\s*[A-Za-z0-9.-]+)*)', text, re.IGNORECASE)
+        contact_section = re.search(
+            r'(?:contact|contact information|contact details)[^@]*?([A-Za-z0-9._%+-]+)\s*@\s*([A-Za-z0-9.-]+(?:\s*\.\s*[A-Za-z0-9.-]+)*)',
+            text, re.IGNORECASE
+        )
         if contact_section:
-            # Remove all spaces from the email parts
             username = contact_section.group(1).replace(" ", "")
             domain = contact_section.group(2).replace(" ", "")
             email = f"{username}@{domain}"
             print(f"DEBUG: Found email in contact section: {email}")
             return email
-        
+
         print("DEBUG: No email found in text")
         return None
 
@@ -155,7 +165,7 @@ class ResumeParser:
         phone_keywords = [
             "phone", "phone no", "phone number", "mobile", "mobile no", "mobile number",
             "cell", "cell no", "cell number", "tel", "tel no", "telephone", "telephone no",
-            "contact", "contact no", "reach me at", "call", "📞"
+            "contact", "contact no", "reach me at", "call", "📞", "📱"
         ]
         # Build a regex pattern to match keywords followed by a phone number
         keyword_pattern = r'(' + '|'.join([re.escape(k) for k in phone_keywords]) + r')[\s:]*([+\d][\d\s\-().]{7,})'
@@ -174,39 +184,59 @@ class ResumeParser:
     
 
     def _calculate_years_of_experience(self, doc) -> float:
-        """Calculate total years of experience."""
-        experience = self._extract_experience(doc)
-        if experience:
-            total_years = 0.0
-            for exp in experience:
-                start_year = exp.get("joining_year")
-                end_year = exp.get("end_year")
-                if start_year and end_year:
-                    total_years += end_year - start_year
-                elif start_year:
-                    # If no end year, assume current year
-                    current_year = datetime.now().year
-                    total_years += current_year - start_year
-            if total_years > 0:
-                return round(total_years, 1)
-        
-        # Fallback: look for phrases like 'X years of experience' in the text
-        text = doc.text.lower()
+        """Calculate total years of experience from text and experience sections."""
+        text = doc.text
+
+        # Step 1: Regex for "X years of experience"
+        text_lower = text.lower()
         patterns = [
-            r'(\d+(?:\.\d+)?)\s*(\+)?\s*years? of experience',
-            r'(\d+(?:\.\d+)?)\s*(\+)?\s*yrs? of experience',
-            r'(\d+(?:\.\d+)?)\s*(\+)?\s*years? experience',
-            r'(\d+(?:\.\d+)?)\s*(\+)?\s*yrs? experience'
+            r'(\d+(?:\.\d+)?)(\s*\+)?\s*years? of experience',
+            r'(\d+(?:\.\d+)?)(\s*\+)?\s*yrs? of experience',
+            r'(\d+(?:\.\d+)?)(\s*\+)?\s*years? experience',
+            r'(\d+(?:\.\d+)?)(\s*\+)?\s*yrs? experience'
         ]
         for pattern in patterns:
-            match = re.search(pattern, text)
+            match = re.search(pattern, text_lower)
             if match:
                 years = float(match.group(1))
                 if match.group(2):
                     years += 0.5
                 return years
-        
-        return 0.0
+
+        # Step 2 & 3: Only consider "Experience" sections for date ranges and structured experience
+        experience_section_pattern = re.compile(
+            r'(project experience|professional experience|experience|project details)(.*?)(?=(\n[A-Z][^\n]*:|\Z))',
+            re.IGNORECASE | re.DOTALL
+        )
+        experience_sections = experience_section_pattern.findall(text)
+        total_months = 0
+
+        for _, section_text, _ in experience_sections:
+            # Step 2: Extract date ranges in this section
+            date_range_pattern = re.compile(
+                r'([A-Za-z]+ \d{4})\s*[-–]\s*([A-Za-z]+ \d{4}|Present|Till Date|Till Now|Current)', re.IGNORECASE
+            )
+            matches = date_range_pattern.findall(section_text)
+            for start_str, end_str in matches:
+                try:
+                    start_date = date_parser.parse(start_str)
+                    if re.search(r'present|till date|till now|current', end_str, re.IGNORECASE):
+                        end_date = datetime.now()
+                    else:
+                        end_date = date_parser.parse(end_str)
+                    months = (end_date.year - start_date.year) * 12 + (end_date.month - start_date.month)
+                    if months > 0:
+                        total_months += months
+                except Exception as e:
+                    print(f"DEBUG: Failed to parse date range '{start_str} - {end_str}': {e}")
+
+            # Step 3: Structured experience (joining_year, end_year) in this section
+            # (If your _extract_experience method can be limited to this section, use it here.
+            # Otherwise, you may need to parse this section for years manually.)
+
+        # Convert months to years
+        total_years = total_months / 12.0
+        return round(total_years, 1)
 
     def _extract_current_job_title(self, doc) -> Optional[str]:
         """Extract current job title."""
@@ -242,10 +272,10 @@ class ResumeParser:
         """Extract skills using predefined skill list and NLP."""
         # Common technical skills
         skill_keywords = {
-            "programming": ["python", "java", "javascript", "c++", "ruby", "php", "swift", "kotlin"],
-            "databases": ["sql", "mysql", "postgresql", "mongodb", "redis", "oracle"],
-            "frameworks": ["django", "flask", "react", "angular", "vue", "spring", "express"],
-            "tools": ["git", "docker", "kubernetes", "jenkins", "aws", "azure", "gcp"],
+            "programming": ["python", "Numbpy", "pandas" "java", "javascript", "c++", "ruby", "php", "swift", "kotlin"],
+            "databases": ["sql", "mysql", "postgresql", "mongodb", "redis", "oracle", "Couchbase", "Cassandra", "NoSql"],
+            "frameworks": ["django", "flask", "react", "angular", "vue", "spring", "spring boot"],
+            "tools": ["git", "docker", "kubernetes", "jenkins", "aws", "azure", "gcp", "postman", "swagger", "rest", "restful", "rest api", "restful api", "maven", "gradle","grafana","splunk"],
             "languages": ["english", "spanish", "french", "german", "chinese", "japanese"]
         }
         
